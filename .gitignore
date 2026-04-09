@@ -1,0 +1,33 @@
+# Data and model artifacts (large files, not for git)
+data.nosync/
+checkpoints.nosync/
+logs.nosync/
+prs_weights.tsv
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+.eggs/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude Code
+.claude/
