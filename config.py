@@ -2,15 +2,15 @@ from pathlib import Path
 import torch
 
 PROJECT_ROOT = Path(__file__).resolve().parent
-DATA_RAW_DIR = PROJECT_ROOT / "data.nosync" / "raw"
-DATA_PROCESSED_DIR = PROJECT_ROOT / "data.nosync" / "processed"
+DATA_DIR = PROJECT_ROOT / "data.nosync"
+DATASET_RAW_PATH = DATA_DIR / "raw"
+DATASET_PATH = DATA_DIR / "dataset"
 CHECKPOINT_DIR = PROJECT_ROOT / "checkpoints.nosync"
 LOG_DIR = PROJECT_ROOT / "logs.nosync"
-NORM_STATS_PATH = DATA_PROCESSED_DIR / "norm_stats.json"
+NORM_STATS_PATH = DATA_DIR / "norm_stats.json"
 
 HF_DATASET = "OpenMed/pgc-schizophrenia"
 HF_CONFIG = "scz2022"
-DOWNLOAD_CHUNK_SIZE = 100_000
 
 NUMERIC_FEATURES = [
     "BP_norm", "FRQ_A", "FRQ_U", "FRQ_DIFF", "FRQ_MEAN",

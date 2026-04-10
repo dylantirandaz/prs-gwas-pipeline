@@ -9,18 +9,18 @@ from training.trainer import Trainer
 
 
 def main():
-    if not (config.DATA_PROCESSED_DIR / "chr1_normalized.parquet").exists():
-        print("Processed data not found. Run these first:")
+    if not config.DATASET_PATH.exists():
+        print("Processed dataset not found. Run these first:")
         print("  python data/download.py")
         print("  python data/preprocessing.py")
         sys.exit(1)
 
     print("Counting training batches...")
-    steps_per_epoch = count_batches(config.TRAIN_CHRS)
+    steps_per_epoch = count_batches("train")
     print(f"Estimated batches per epoch: {steps_per_epoch}")
 
-    train_loader = get_dataloader(config.TRAIN_CHRS, shuffle=True)
-    val_loader = get_dataloader(config.VAL_CHRS, shuffle=False)
+    train_loader = get_dataloader("train", shuffle=True)
+    val_loader = get_dataloader("val", shuffle=False)
 
     model = PRSNet()
     print(f"\nPRSNet architecture:")
@@ -32,7 +32,7 @@ def main():
 
     print("\n" + "=" * 60)
     print("Test set evaluation (chr22):")
-    test_loader = get_dataloader(config.TEST_CHRS, shuffle=False)
+    test_loader = get_dataloader("test", shuffle=False)
 
     best_path = config.CHECKPOINT_DIR / "best_model.pt"
     if best_path.exists():
