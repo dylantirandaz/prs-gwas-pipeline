@@ -17,7 +17,7 @@ class PRSNet(nn.Module):
         self.a1_embed = nn.Embedding(config.ALLELE_VOCAB, config.ALLELE_EMBED_DIM)
         self.a2_embed = nn.Embedding(config.ALLELE_VOCAB, config.ALLELE_EMBED_DIM)
 
-        self.input_bn = nn.BatchNorm1d(config.TOTAL_INPUT_DIM)
+        self.input_norm = nn.LayerNorm(config.TOTAL_INPUT_DIM)
 
         dims = [config.TOTAL_INPUT_DIM] + config.HIDDEN_DIMS
         self.res_blocks = nn.ModuleList([
@@ -28,6 +28,7 @@ class PRSNet(nn.Module):
         self.head = nn.Sequential(
             nn.Linear(config.HIDDEN_DIMS[-1], config.HEAD_HIDDEN),
             nn.ReLU(),
+            nn.Dropout(config.DROPOUT),
             nn.Linear(config.HEAD_HIDDEN, 1),
         )
 
@@ -40,7 +41,7 @@ class PRSNet(nn.Module):
             self.a2_embed(a2_idx),
         ], dim=-1)
 
-        x = self.input_bn(x)
+        x = self.input_norm(x)
         for block in self.res_blocks:
             x = block(x)
 

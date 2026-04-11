@@ -24,6 +24,7 @@ class Trainer:
             weight_decay=config.WEIGHT_DECAY,
         )
         self.best_val_loss = float("inf")
+        self.patience_counter = 0
         self.history = []
 
         config.CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
@@ -165,11 +166,18 @@ class Trainer:
             is_best = val_metrics["loss"] < self.best_val_loss
             if is_best:
                 self.best_val_loss = val_metrics["loss"]
+                self.patience_counter = 0
+            else:
+                self.patience_counter += 1
             self.save_checkpoint(epoch, val_metrics, is_best=is_best)
             self.log_epoch(epoch, train_metrics, val_metrics, elapsed)
 
             if self.device.type == "mps":
                 torch.mps.empty_cache()
             print()
+
+            if self.patience_counter >= config.EARLY_STOPPING_PATIENCE:
+                print(f"Early stopping at epoch {epoch + 1} (no improvement for {config.EARLY_STOPPING_PATIENCE} epochs)")
+                break
 
         print(f"Training complete. Best val loss: {self.best_val_loss:.6f}")
