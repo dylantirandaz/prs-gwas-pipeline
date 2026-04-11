@@ -4,11 +4,9 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import torch
-from datasets import Dataset
 from tqdm import tqdm
 
 import config
-from data.dataset import TENSOR_COLUMNS, _parquet_paths
 from models.prs_net import PRSNet
 
 
@@ -31,40 +29,38 @@ def generate_weights(output_path: Path | None = None):
     print(f"Val metrics: {checkpoint['val_metrics']}")
     print(f"Device: {config.DEVICE}")
 
-    all_chrs = sorted(config.TRAIN_CHRS + config.VAL_CHRS + config.TEST_CHRS)
-    paths = _parquet_paths(all_chrs)
-    all_data = Dataset.from_parquet(paths)
+    all_results = []
 
-    snps = all_data["SNP"]
-    chrs = all_data["CHR"]
-    bps = all_data["BP"]
-    log_or_raw = np.array(all_data["logOR"], dtype=np.float64)
+    for chrom in tqdm(range(1, 23), desc="Generating PRS weights"):
+        norm_path = config.DATA_PROCESSED_DIR / f"chr{chrom}_normalized.parquet"
+        if not norm_path.exists():
+            continue
 
-    tensor_ds = all_data.with_format("torch", columns=TENSOR_COLUMNS)
+        df_norm = pd.read_parquet(norm_path)
 
-    preds_list = []
-    with torch.no_grad():
-        for start in tqdm(range(0, len(tensor_ds), config.BATCH_SIZE), desc="Generating PRS weights"):
-            end = min(start + config.BATCH_SIZE, len(tensor_ds))
-            batch = tensor_ds[start:end]
+        preds_list = []
+        with torch.no_grad():
+            for start in range(0, len(df_norm), config.BATCH_SIZE):
+                end = min(start + config.BATCH_SIZE, len(df_norm))
+                chunk = df_norm.iloc[start:end]
 
-            numeric = torch.stack(
-                [batch[f] for f in config.NUMERIC_FEATURES], dim=-1
-            ).to(config.DEVICE, non_blocking=True)
-            chr_idx = batch["chr_idx"].long().to(config.DEVICE, non_blocking=True)
-            a1_idx = batch["a1_idx"].long().to(config.DEVICE, non_blocking=True)
-            a2_idx = batch["a2_idx"].long().to(config.DEVICE, non_blocking=True)
+                numeric = torch.tensor(chunk[config.NUMERIC_FEATURES].values, dtype=torch.float32).to(config.DEVICE, non_blocking=True)
+                chr_idx = torch.tensor(chunk["chr_idx"].values, dtype=torch.long).to(config.DEVICE, non_blocking=True)
+                a1_idx = torch.tensor(chunk["a1_idx"].values, dtype=torch.long).to(config.DEVICE, non_blocking=True)
+                a2_idx = torch.tensor(chunk["a2_idx"].values, dtype=torch.long).to(config.DEVICE, non_blocking=True)
 
-            preds_list.append(model(numeric, chr_idx, a1_idx, a2_idx).cpu().numpy())
+                preds_list.append(model(numeric, chr_idx, a1_idx, a2_idx).cpu().numpy())
 
-    preds = np.concatenate(preds_list)
-    combined = pd.DataFrame({
-        "SNP": snps[:len(preds)],
-        "CHR": chrs[:len(preds)],
-        "BP": bps[:len(preds)],
-        "PRS_WEIGHT": preds,
-        "ORIGINAL_logOR": log_or_raw[:len(preds)],
-    })
+        preds = np.concatenate(preds_list)
+        all_results.append(pd.DataFrame({
+            "SNP": df_norm["SNP"].values[:len(preds)],
+            "CHR": df_norm["CHR"].values[:len(preds)],
+            "BP": df_norm["BP"].values[:len(preds)],
+            "PRS_WEIGHT": preds,
+            "ORIGINAL_logOR": df_norm["logOR"].values[:len(preds)],
+        }))
+
+    combined = pd.concat(all_results, ignore_index=True)
     combined.to_csv(output_path, sep="\t", index=False, float_format="%.6f")
 
     print(f"\nPRS weights saved to {output_path}")

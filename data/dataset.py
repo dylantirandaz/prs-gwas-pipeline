@@ -1,18 +1,14 @@
+import random
 import sys
 from pathlib import Path
 
+import pandas as pd
 import pyarrow.parquet as pq
 import torch
-from datasets import Dataset
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, IterableDataset
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import config
-
-TENSOR_COLUMNS = (
-    config.NUMERIC_FEATURES
-    + ["chr_idx", "a1_idx", "a2_idx", "logOR", "SE"]
-)
 
 SPLITS = {
     "train": config.TRAIN_CHRS,
@@ -21,44 +17,51 @@ SPLITS = {
 }
 
 
-def _parquet_paths(chromosomes: list[int]) -> list[str]:
-    return [
-        str(config.DATA_PROCESSED_DIR / f"chr{c}_normalized.parquet")
-        for c in chromosomes
-        if (config.DATA_PROCESSED_DIR / f"chr{c}_normalized.parquet").exists()
-    ]
+class GWASDataset(IterableDataset):
+    def __init__(self, chromosomes: list[int], batch_size: int = config.BATCH_SIZE, shuffle: bool = True):
+        self.batch_size = batch_size
+        self.shuffle = shuffle
+        self.file_paths = [
+            config.DATA_PROCESSED_DIR / f"chr{c}_normalized.parquet"
+            for c in chromosomes
+            if (config.DATA_PROCESSED_DIR / f"chr{c}_normalized.parquet").exists()
+        ]
 
+    def __iter__(self):
+        paths = list(self.file_paths)
+        if self.shuffle:
+            random.shuffle(paths)
 
-def gwas_collate(batch: list[dict]) -> dict:
-    collated = {}
-    for key in batch[0]:
-        collated[key] = torch.stack([item[key] for item in batch])
+        for path in paths:
+            df = pd.read_parquet(path)
+            if self.shuffle:
+                df = df.sample(frac=1.0).reset_index(drop=True)
 
-    numeric = torch.stack(
-        [collated[f] for f in config.NUMERIC_FEATURES], dim=-1
-    )
-    return {
-        "numeric": numeric,
-        "chr_idx": collated["chr_idx"].long(),
-        "a1_idx": collated["a1_idx"].long(),
-        "a2_idx": collated["a2_idx"].long(),
-        "target": collated["logOR"],
-        "se": collated["SE"],
-    }
+            numeric = torch.tensor(df[config.NUMERIC_FEATURES].values, dtype=torch.float32)
+            chr_idx = torch.tensor(df["chr_idx"].values, dtype=torch.long)
+            a1_idx = torch.tensor(df["a1_idx"].values, dtype=torch.long)
+            a2_idx = torch.tensor(df["a2_idx"].values, dtype=torch.long)
+            targets = torch.tensor(df["logOR"].values, dtype=torch.float32)
+            se = torch.tensor(df["SE"].values, dtype=torch.float32)
+
+            for start in range(0, len(df), self.batch_size):
+                end = min(start + self.batch_size, len(df))
+                yield {
+                    "numeric": numeric[start:end],
+                    "chr_idx": chr_idx[start:end],
+                    "a1_idx": a1_idx[start:end],
+                    "a2_idx": a2_idx[start:end],
+                    "target": targets[start:end],
+                    "se": se[start:end],
+                }
 
 
 def get_dataloader(split: str, shuffle: bool = True) -> DataLoader:
-    paths = _parquet_paths(SPLITS[split])
-    ds = Dataset.from_parquet(paths)
-    ds = ds.with_format("torch", columns=TENSOR_COLUMNS)
     return DataLoader(
-        ds,
-        batch_size=config.BATCH_SIZE,
-        shuffle=shuffle,
+        GWASDataset(SPLITS[split], shuffle=shuffle),
+        batch_size=None,
         num_workers=0,
         pin_memory=False,
-        collate_fn=gwas_collate,
-        drop_last=False,
     )
 
 
