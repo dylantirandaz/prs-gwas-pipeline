@@ -4,11 +4,11 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import torch
-from datasets import concatenate_datasets, load_from_disk
+from datasets import Dataset
 from tqdm import tqdm
 
 import config
-from data.dataset import TENSOR_COLUMNS
+from data.dataset import TENSOR_COLUMNS, _parquet_paths
 from models.prs_net import PRSNet
 
 
@@ -31,9 +31,9 @@ def generate_weights(output_path: Path | None = None):
     print(f"Val metrics: {checkpoint['val_metrics']}")
     print(f"Device: {config.DEVICE}")
 
-    ds = load_from_disk(str(config.DATASET_PATH))
-    all_data = concatenate_datasets([ds["train"], ds["val"], ds["test"]])
-    all_data = all_data.sort("CHR")
+    all_chrs = sorted(config.TRAIN_CHRS + config.VAL_CHRS + config.TEST_CHRS)
+    paths = _parquet_paths(all_chrs)
+    all_data = Dataset.from_parquet(paths)
 
     snps = all_data["SNP"]
     chrs = all_data["CHR"]

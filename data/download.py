@@ -2,8 +2,11 @@ import re
 import sys
 from pathlib import Path
 
-import numpy as np
+import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 from datasets import load_dataset
+from tqdm import tqdm
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import config
@@ -17,54 +20,85 @@ KEEP_COLS = [
     "HetISqt", "HetDf", "HetPVa", "Nca", "Nco", "Neff",
 ]
 
+OUTPUT_SCHEMA = pa.schema([
+    ("CHR", pa.int64()),
+    ("SNP", pa.string()),
+    ("BP", pa.float64()),
+    ("A1", pa.string()),
+    ("A2", pa.string()),
+    ("FRQ_A_1", pa.float64()),
+    ("FRQ_U_1", pa.float64()),
+    ("INFO", pa.float64()),
+    ("OR", pa.float64()),
+    ("SE", pa.float64()),
+    ("P", pa.float64()),
+    ("ngt", pa.float64()),
+    ("Direction", pa.string()),
+    ("HetISqt", pa.float64()),
+    ("HetDf", pa.float64()),
+    ("HetPVa", pa.float64()),
+    ("Nca", pa.float64()),
+    ("Nco", pa.float64()),
+    ("Neff", pa.float64()),
+])
+
 
 def download_and_save():
-    print(f"Loading {config.HF_DATASET} ({config.HF_CONFIG}) via HF datasets...")
-    ds = load_dataset(config.HF_DATASET, config.HF_CONFIG, split="train")
-    print(f"Loaded {len(ds):,} rows, {len(ds.column_names)} columns")
+    print(f"Loading {config.HF_DATASET} via HF datasets (streaming)...")
+    ds = load_dataset(config.HF_DATASET, split="train", streaming=True)
 
     frq_a_cols = sorted(c for c in ds.column_names if FRQ_A_RE.match(c))
     frq_u_cols = sorted(c for c in ds.column_names if FRQ_U_RE.match(c))
+    print(f"FRQ_A variants: {frq_a_cols}")
+    print(f"FRQ_U variants: {frq_u_cols}")
 
-    needs_coalesce = len(frq_a_cols) > 1 or (frq_a_cols and frq_a_cols != ["FRQ_A_1"])
+    config.DATA_RAW_DIR.mkdir(parents=True, exist_ok=True)
 
-    if needs_coalesce:
-        print(f"Coalescing FRQ columns: {frq_a_cols} -> FRQ_A_1, {frq_u_cols} -> FRQ_U_1")
+    writers: dict[int, pq.ParquetWriter] = {}
+    chr_counts: dict[int, int] = {}
+    total = 0
 
-        def coalesce_frq(batch):
-            frq_a = np.array(batch[frq_a_cols[0]], dtype=np.float64)
-            for col in frq_a_cols[1:]:
-                vals = np.array(batch[col], dtype=np.float64)
-                mask = np.isnan(frq_a)
-                frq_a[mask] = vals[mask]
+    try:
+        for batch in tqdm(ds.iter(batch_size=10_000), desc="Streaming"):
+            df = pd.DataFrame(batch)
+            total += len(df)
 
-            frq_u = np.array(batch[frq_u_cols[0]], dtype=np.float64)
-            for col in frq_u_cols[1:]:
-                vals = np.array(batch[col], dtype=np.float64)
-                mask = np.isnan(frq_u)
-                frq_u[mask] = vals[mask]
+            # Coalesce FRQ columns
+            df["FRQ_A_1"] = df[frq_a_cols].bfill(axis=1).iloc[:, 0].infer_objects(copy=False)
+            df["FRQ_U_1"] = df[frq_u_cols].bfill(axis=1).iloc[:, 0].infer_objects(copy=False)
 
-            return {"FRQ_A_1": frq_a.tolist(), "FRQ_U_1": frq_u.tolist()}
+            # Convert CHR to numeric, drop non-autosomes
+            df["CHR"] = pd.to_numeric(df["CHR"], errors="coerce")
+            df = df.dropna(subset=["CHR"])
+            df["CHR"] = df["CHR"].astype(int)
+            df = df[df["CHR"].between(1, 22)]
 
-        ds = ds.map(coalesce_frq, batched=True, batch_size=10_000, desc="Coalescing FRQ columns")
+            if df.empty:
+                continue
 
-    def is_autosome(batch):
-        results = []
-        for chr_val in batch["CHR"]:
-            try:
-                results.append(1 <= int(chr_val) <= 22)
-            except (ValueError, TypeError):
-                results.append(False)
-        return results
+            available = [c for c in KEEP_COLS if c in df.columns]
+            df = df[available]
 
-    ds = ds.filter(is_autosome, batched=True, batch_size=10_000, desc="Filtering autosomes")
+            for chrom, group in df.groupby("CHR"):
+                chrom = int(chrom)
+                table = pa.Table.from_pandas(group, preserve_index=False)
+                table = table.cast(OUTPUT_SCHEMA)
 
-    available = [c for c in KEEP_COLS if c in ds.column_names]
-    ds = ds.select_columns(available)
+                if chrom not in writers:
+                    outpath = config.DATA_RAW_DIR / f"chr{chrom}.parquet"
+                    writers[chrom] = pq.ParquetWriter(str(outpath), OUTPUT_SCHEMA)
+                    chr_counts[chrom] = 0
 
-    config.DATASET_RAW_PATH.mkdir(parents=True, exist_ok=True)
-    ds.save_to_disk(str(config.DATASET_RAW_PATH))
-    print(f"\nSaved {len(ds):,} variants to {config.DATASET_RAW_PATH}")
+                writers[chrom].write_table(table)
+                chr_counts[chrom] += len(group)
+
+    finally:
+        for w in writers.values():
+            w.close()
+
+    print(f"\nDone. Total rows streamed: {total:,}")
+    for chrom in sorted(chr_counts):
+        print(f"  chr{chrom}: {chr_counts[chrom]:,} variants")
 
 
 if __name__ == "__main__":

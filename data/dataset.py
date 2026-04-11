@@ -1,8 +1,9 @@
 import sys
 from pathlib import Path
 
+import pyarrow.parquet as pq
 import torch
-from datasets import load_from_disk
+from datasets import Dataset
 from torch.utils.data import DataLoader
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -12,6 +13,20 @@ TENSOR_COLUMNS = (
     config.NUMERIC_FEATURES
     + ["chr_idx", "a1_idx", "a2_idx", "logOR", "SE"]
 )
+
+SPLITS = {
+    "train": config.TRAIN_CHRS,
+    "val": config.VAL_CHRS,
+    "test": config.TEST_CHRS,
+}
+
+
+def _parquet_paths(chromosomes: list[int]) -> list[str]:
+    return [
+        str(config.DATA_PROCESSED_DIR / f"chr{c}_normalized.parquet")
+        for c in chromosomes
+        if (config.DATA_PROCESSED_DIR / f"chr{c}_normalized.parquet").exists()
+    ]
 
 
 def gwas_collate(batch: list[dict]) -> dict:
@@ -33,10 +48,11 @@ def gwas_collate(batch: list[dict]) -> dict:
 
 
 def get_dataloader(split: str, shuffle: bool = True) -> DataLoader:
-    ds = load_from_disk(str(config.DATASET_PATH))
-    split_ds = ds[split].with_format("torch", columns=TENSOR_COLUMNS)
+    paths = _parquet_paths(SPLITS[split])
+    ds = Dataset.from_parquet(paths)
+    ds = ds.with_format("torch", columns=TENSOR_COLUMNS)
     return DataLoader(
-        split_ds,
+        ds,
         batch_size=config.BATCH_SIZE,
         shuffle=shuffle,
         num_workers=0,
@@ -47,6 +63,9 @@ def get_dataloader(split: str, shuffle: bool = True) -> DataLoader:
 
 
 def count_batches(split: str) -> int:
-    ds = load_from_disk(str(config.DATASET_PATH))
-    n = len(ds[split])
-    return (n + config.BATCH_SIZE - 1) // config.BATCH_SIZE
+    total = 0
+    for c in SPLITS[split]:
+        p = config.DATA_PROCESSED_DIR / f"chr{c}_normalized.parquet"
+        if p.exists():
+            total += pq.read_metadata(str(p)).num_rows
+    return (total + config.BATCH_SIZE - 1) // config.BATCH_SIZE

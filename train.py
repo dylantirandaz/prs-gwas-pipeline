@@ -9,7 +9,7 @@ from training.trainer import Trainer
 
 
 def main():
-    if not config.DATASET_PATH.exists():
+    if not (config.DATA_PROCESSED_DIR / "chr1_normalized.parquet").exists():
         print("Processed dataset not found. Run these first:")
         print("  python data/download.py")
         print("  python data/preprocessing.py")
