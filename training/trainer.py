@@ -30,17 +30,14 @@ class Trainer:
         config.CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
         config.LOG_DIR.mkdir(parents=True, exist_ok=True)
 
-    def setup_scheduler(self, steps_per_epoch: int):
-        total_steps = config.EPOCHS * steps_per_epoch
-        warmup_steps = config.WARMUP_EPOCHS * steps_per_epoch
-
-        def lr_lambda(step):
-            if step < warmup_steps:
-                return step / max(warmup_steps, 1)
-            progress = (step - warmup_steps) / max(total_steps - warmup_steps, 1)
-            return 0.5 * (1.0 + torch.cos(torch.tensor(progress * 3.14159)).item())
-
-        self.scheduler = torch.optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda)
+    def setup_scheduler(self):
+        self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            self.optimizer,
+            mode="min",
+            factor=config.LR_FACTOR,
+            patience=config.LR_PATIENCE,
+            min_lr=config.MIN_LR,
+        )
 
     def _to_device(self, batch: dict) -> tuple:
         return (
@@ -69,9 +66,6 @@ class Trainer:
             loss.backward()
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), config.GRAD_CLIP_NORM)
             self.optimizer.step()
-
-            if hasattr(self, "scheduler"):
-                self.scheduler.step()
 
             total_loss += loss.item()
             n_batches += 1
@@ -144,7 +138,7 @@ class Trainer:
             json.dump(self.history, f, indent=2)
 
     def fit(self, train_loader, val_loader, steps_per_epoch: int):
-        self.setup_scheduler(steps_per_epoch)
+        self.setup_scheduler()
 
         print(f"Training on {self.device}")
         print(f"Model parameters: {self.model.count_parameters():,}")
@@ -152,6 +146,11 @@ class Trainer:
         print(f"Estimated batches/epoch: ~{steps_per_epoch}\n")
 
         for epoch in range(config.EPOCHS):
+            if epoch < config.WARMUP_EPOCHS:
+                warmup_lr = config.LEARNING_RATE * (epoch + 1) / config.WARMUP_EPOCHS
+                for pg in self.optimizer.param_groups:
+                    pg["lr"] = warmup_lr
+
             if self.device.type == "mps":
                 torch.mps.synchronize()
             start = time.time()
@@ -162,6 +161,9 @@ class Trainer:
             if self.device.type == "mps":
                 torch.mps.synchronize()
             elapsed = time.time() - start
+
+            if epoch >= config.WARMUP_EPOCHS:
+                self.scheduler.step(val_metrics["loss"])
 
             is_best = val_metrics["loss"] < self.best_val_loss
             if is_best:
