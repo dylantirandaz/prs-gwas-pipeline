@@ -35,10 +35,10 @@ def process_chromosome(df: pd.DataFrame) -> pd.DataFrame:
     df["log_SE"] = np.log(df["SE"])
     df["neg_log10_HetPVal"] = -np.log10(df["HetPVa"].clip(lower=1e-300))
     df["HetISqt_scaled"] = df["HetISqt"] / 100.0
-    df["log_HetDf"] = np.log(df["HetDf"].clip(lower=1))
-    df["log_Nca"] = np.log(df["Nca"].clip(lower=1))
-    df["log_Nco"] = np.log(df["Nco"].clip(lower=1))
-    df["log_Neff"] = np.log(df["Neff"].clip(lower=1))
+    df["log_HetDf"] = np.log(df["HetDf"].fillna(0).clip(lower=1))
+    df["log_Nca"] = np.log(df["Nca"].fillna(0).clip(lower=1))
+    df["log_Nco"] = np.log(df["Nco"].fillna(0).clip(lower=1))
+    df["log_Neff"] = np.log(df["Neff"].fillna(0).clip(lower=1))
     df["ngt"] = df["ngt"].fillna(0).astype(float)
     df["direction_ratio"] = df["Direction"].apply(_direction_ratio)
 
